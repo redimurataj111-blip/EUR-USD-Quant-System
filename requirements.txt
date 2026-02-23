@@ -1,0 +1,12 @@
+# EUR/USD Quant System - Dependencies
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+streamlit>=1.28.0
+streamlit-autorefresh>=0.0.1
+plotly>=5.18.0
+yfinance>=0.2.0
+# torch optional (sklearn used instead to avoid Windows DLL issues)
+hmmlearn>=0.3.0
+psycopg2-binary>=2.9.0   # For QuestDB
