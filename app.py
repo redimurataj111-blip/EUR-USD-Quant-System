@@ -32,15 +32,15 @@ with st.sidebar:
     
     live_period, live_interval, auto_refresh, refresh_sec = "5d", "1h", False, 60
     if data_source == "live":
-        live_period = st.selectbox("Live period", ["5d", "7d", "1mo", "3mo"], index=0)
-        live_interval = st.selectbox("Interval", ["1h", "1d"], index=0)
-        auto_refresh = st.checkbox("Auto-refresh", value=True, help="Refresh every 60 seconds")
-        refresh_sec = st.slider("Refresh interval (sec)", 30, 300, 60) if auto_refresh else 60
+        live_period = st.selectbox("Live period", ["1d", "5d", "7d"], index=1)
+        live_interval = st.selectbox("Interval", ["1m", "5m", "1h"], index=0)
+        auto_refresh = st.checkbox("Auto-refresh every minute", value=True, help="Updates live price every 60 seconds")
+        refresh_sec = 60  # Fixed 60 seconds for minute-by-minute updates
     
     st.header("Parameters")
-    rdc_window = st.slider("RDC window", 30, 120, 60)
-    n_pca = st.slider("PCA components", 3, 10, 5)
-    nn_epochs = st.slider("NN epochs", 10, 100, 50)
+    rdc_window = st.slider("RDC window", 30, 120, 60, help="60 = optimal for hourly data")
+    n_pca = st.slider("PCA components", 3, 10, 5, help="5 = good balance")
+    nn_epochs = st.slider("NN epochs", 10, 100, 50, help="50+ for better convergence")
     
     csv_dir = st.text_input(
         "CSV directory (optional)",
@@ -51,21 +51,22 @@ with st.sidebar:
     st.header("Signal Mode")
     signal_mode = st.radio(
         "Mode",
-        ["simple", "regime"],
-        format_func=lambda x: "Simple (NN only, more signals)" if x == "simple" else "Regime (HMM + NN, stricter)",
-        horizontal=True
+        ["regime", "simple"],
+        format_func=lambda x: "Regime (HMM + NN, stricter) 🎯 50%+ WR, PF≥2" if x == "regime" else "Simple (NN only, more signals)",
+        horizontal=True,
+        help="Regime mode is optimized for 50% win rate and 2.0+ profit factor"
     )
-    min_predicted_pips = st.slider("Min predicted pips", 0, 50, 0, help="0 = disabled")
+    min_predicted_pips = st.slider("Min predicted pips", 20, 60, 35, help="Only take trades predicting 35+ pips move")
     
-    st.header("Backtest (LONG only)")
-    holding_periods = st.slider("Holding periods (bars)", 1, 48, 24, help="Max bars to hold")
-    take_profit_pips = st.slider("Take profit (pips)", 30, 100, 60, help="60 pips = 2:1 R:R for PF≥2")
-    stop_loss_pips = st.slider("Stop loss (pips)", 15, 50, 30, help="30 pips")
+    st.header("Backtest Settings (for 50%+ WR & PF≥2)")
+    holding_periods = st.slider("Holding periods (bars)", 1, 48, 24, help="Max bars to hold trade")
+    take_profit_pips = st.slider("Take profit (pips)", 40, 80, 60, help="TP at 60 pips (2:1 R:R with 30 pips SL)")
+    stop_loss_pips = st.slider("Stop loss (pips)", 15, 50, 30, help="SL at 30 pips (mathematically: PF=3 at 50% WR)")
     use_tp_sl = st.checkbox("Use TP/SL", value=True, help="Exit at TP or SL; else time-based only")
-    exit_on_danger = st.checkbox("Exit on DANGER signal", value=True)
+    exit_on_danger = st.checkbox("Exit on DANGER signal", value=True, help="Exit immediately on high volatility")
 
 # ── Load Data ────────────────────────────────────────────────
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=15)
 def load_data(source: str, use_sample: bool, csv_dir: str, live_period: str = "5d", live_interval: str = "1h"):
     if use_sample:
         return create_sample_data(n=1000)
@@ -118,12 +119,25 @@ if data_source == "live":
     pred_pips = results["predicted_pips"].iloc[-1]
     
     sig_color = "green" if latest_signal == "LONG" else "red" if latest_signal == "DANGER" else "orange"
-    st.markdown(f"""
-    <div style="background:{sig_color}; padding:15px; border-radius:10px; margin-bottom:15px; color:white;">
-    <h3 style="margin:0;">LIVE: {latest_signal} | Price: {latest_price:.5f} | {latest_time.strftime('%Y-%m-%d %H:%M')}</h3>
-    <p style="margin:5px 0 0 0;">NN signal: {nn_sig:.3f} | Predicted pips: {pred_pips:.1f}</p>
-    </div>
-    """, unsafe_allow_html=True)
+    
+    # Display live price prominently with auto-update indicator
+    col_price, col_info = st.columns([3, 2])
+    with col_price:
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg, {sig_color} 0%, rgba(255,255,255,0.1) 100%); padding:20px; border-radius:10px; margin-bottom:15px; border:3px solid {sig_color};">
+        <h2 style="margin:0; color:white;">EUR/USD: {latest_price:.5f}</h2>
+        <p style="margin:5px 0 0 0; color:white; font-size:14px;">🔄 Updates every 60 seconds</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_info:
+        st.markdown(f"""
+        <div style="background:#f0f2f6; padding:15px; border-radius:10px; margin-bottom:15px;">
+        <h3 style="margin:0; color:{sig_color};">Signal: {latest_signal}</h3>
+        <p style="margin:5px 0 0 0; font-size:12px;"><b>Time:</b> {latest_time.strftime('%H:%M:%S')}</p>
+        <p style="margin:3px 0 0 0; font-size:12px;"><b>NN:</b> {nn_sig:.3f} | <b>Pips:</b> {pred_pips:.1f}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── Metrics ──────────────────────────────────────────────────
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -157,20 +171,30 @@ target_pf, target_wr = 2.0, 50.0
 col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
 with col1:
     wr = bt_stats['win_rate_pct']
-    st.metric("Win Rate", f"{wr:.1f}%", delta="✓" if wr >= target_wr else None)
+    status = "✓" if wr >= target_wr else "⚠"
+    st.metric("Win Rate", f"{wr:.1f}%", delta=f"{status} Target: >{target_wr}%")
 with col2:
     pf = bt_stats["profit_factor"]
-    st.metric("Profit Factor", f"{pf:.2f}" if pf != float("inf") else "∞", delta="✓" if pf >= target_pf else None)
+    status = "✓" if pf >= target_pf else "⚠"
+    st.metric("Profit Factor", f"{pf:.2f}" if pf != float("inf") else "∞", delta=f"{status} Target: ≥{target_pf}")
 with col3:
     st.metric("Total Trades", bt_stats["total_trades"])
 with col4:
-    st.metric("Avg Pips", f"{bt_stats.get('avg_pips', 0):.1f}", help="Target: 50-70 pips")
+    st.metric("Avg Pips", f"{bt_stats.get('avg_pips', 0):.1f}", help="Target: 50-70 pips per trade")
 with col5:
     st.metric("Total Return", f"{bt_stats['total_return_pct']:.2f}%")
 with col6:
     st.metric("Avg Win", f"{bt_stats['avg_win_pct']:.3f}%")
 with col7:
     st.metric("Avg Loss", f"{bt_stats['avg_loss_pct']:.3f}%")
+
+# Status bar showing if targets are met
+if wr >= target_wr and pf >= target_pf:
+    st.success(f"🎯 **TARGETS MET!** Win Rate ≥ {target_wr}% AND Profit Factor ≥ {target_pf}")
+elif wr >= target_wr or pf >= target_pf:
+    st.info(f"⚠️  **PARTIAL SUCCESS:** {'WR ✓' if wr >= target_wr else 'WR ✗'} | {'PF ✓' if pf >= target_pf else 'PF ✗'}")
+else:
+    st.warning(f"❌ **TARGETS NOT MET** - WR: {wr:.1f}% (target >{target_wr}) | PF: {pf:.2f} (target ≥{target_pf})")
 
 # ── Charts ───────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs([

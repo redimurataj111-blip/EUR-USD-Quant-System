@@ -17,15 +17,23 @@ def load_from_live(
 ) -> pd.DataFrame:
     """
     Fetch live EUR/USD data from yfinance.
-    period: 1d, 5d, 1mo, 3mo, 6mo, 1y (max 60d for 1h)
-    interval: 1h, 1d
+    period: 1d, 5d, 1mo, 3mo, 6mo, 1y
+    interval: 1m, 5m, 15m, 1h, 1d
+    Note: 1m and 5m intervals limited to 5-7 days max
     """
     import yfinance as yf
     
+    # For minute-level data, limit period to avoid data gaps
+    if interval in ["1m", "5m", "15m"]:
+        if period not in ["1d", "5d", "7d"]:
+            period = "5d"
+    
     df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
     if df.empty or len(df) < 50:
-        # Fallback to longer period if 1h fails
-        df = yf.download(ticker, period="60d", interval="1h", progress=False, auto_adjust=True)
+        # Fallback to hourly if intraday fails
+        fallback_interval = "1h" if interval in ["1m", "5m", "15m"] else "1h"
+        fallback_period = "60d" if interval not in ["1m", "5m", "15m"] else "5d"
+        df = yf.download(ticker, period=fallback_period, interval=fallback_interval, progress=False, auto_adjust=True)
     if df.empty:
         raise ValueError("No live data from yfinance. Check connection.")
     if isinstance(df.columns, pd.MultiIndex):
