@@ -118,7 +118,23 @@ if data_source == "live":
     nn_sig = results["nn_signal"].iloc[-1]
     pred_pips = results["predicted_pips"].iloc[-1]
     
-    sig_color = "green" if latest_signal == "LONG" else "red" if latest_signal == "DANGER" else "orange"
+    # Color code signals
+    if latest_signal == "LONG":
+        sig_color = "#28a745"  # Green - BUY
+        sig_emoji = "🟢"
+        sig_action = "BUY / ENTER LONG"
+    elif latest_signal == "SELL":
+        sig_color = "#dc3545"  # Red - SELL
+        sig_emoji = "🔴"
+        sig_action = "SELL / EXIT LONG"
+    elif latest_signal == "DANGER":
+        sig_color = "#ff6b6b"  # Bright Red - DANGER
+        sig_emoji = "⚠️"
+        sig_action = "DANGER / EXIT LONG"
+    else:  # WAIT or NO_TRADE
+        sig_color = "#ffc107"  # Orange - WAIT
+        sig_emoji = "🟡"
+        sig_action = "WAIT / HOLD"
     
     # Display live price prominently with auto-update indicator
     col_price, col_info = st.columns([3, 2])
@@ -132,28 +148,32 @@ if data_source == "live":
     
     with col_info:
         st.markdown(f"""
-        <div style="background:#f0f2f6; padding:15px; border-radius:10px; margin-bottom:15px;">
-        <h3 style="margin:0; color:{sig_color};">Signal: {latest_signal}</h3>
-        <p style="margin:5px 0 0 0; font-size:12px;"><b>Time:</b> {latest_time.strftime('%H:%M:%S')}</p>
-        <p style="margin:3px 0 0 0; font-size:12px;"><b>NN:</b> {nn_sig:.3f} | <b>Pips:</b> {pred_pips:.1f}</p>
+        <div style="background:{sig_color}22; padding:15px; border-radius:10px; margin-bottom:15px; border:2px solid {sig_color};">
+        <h3 style="margin:0; color:{sig_color};">{sig_emoji} {sig_action}</h3>
+        <p style="margin:5px 0 0 0; font-size:11px;"><b>Signal:</b> {latest_signal}</p>
+        <p style="margin:3px 0 0 0; font-size:11px;"><b>Time:</b> {latest_time.strftime('%H:%M:%S')}</p>
+        <p style="margin:3px 0 0 0; font-size:11px;"><b>NN Confidence:</b> {nn_sig:.3f} | <b>Predicted:</b> {pred_pips:.1f} pips</p>
         </div>
         """, unsafe_allow_html=True)
 
 # ── Metrics ──────────────────────────────────────────────────
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2, col3, col4, col5, col6 = st.columns(6)
 with col1:
     st.metric("Rows", f"{len(df):,}")
 with col2:
     st.metric("Date range", f"{df.index[0].strftime('%Y-%m-%d')} → {df.index[-1].strftime('%Y-%m-%d')}")
 with col3:
     long_count = (results["signal"] == "LONG").sum()
-    st.metric("LONG signals", long_count)
+    st.metric("🟢 BUY", long_count)
 with col4:
-    danger_count = (results["signal"] == "DANGER").sum()
-    st.metric("DANGER (no longs)", danger_count)
+    sell_count = (results["signal"] == "SELL").sum()
+    st.metric("🔴 SELL", sell_count)
 with col5:
+    danger_count = (results["signal"] == "DANGER").sum()
+    st.metric("⚠️ DANGER", danger_count)
+with col6:
     wait_count = (results["signal"] == "WAIT").sum()
-    st.metric("WAIT", wait_count)
+    st.metric("🟡 WAIT", wait_count)
 
 # ── Backtest ─────────────────────────────────────────────────
 trades_df, bt_stats = run_backtest(

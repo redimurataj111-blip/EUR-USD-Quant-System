@@ -12,6 +12,7 @@ from enum import Enum
 
 class Signal(Enum):
     LONG = "LONG"
+    SELL = "SELL"
     DANGER = "DANGER"
     WAIT = "WAIT"
     NO_TRADE = "NO_TRADE"
@@ -40,8 +41,15 @@ def compute_signal(
 ) -> Signal:
     """
     signal_mode:
-      "simple" = LONG when nn_signal > 0.3, DANGER only if regime=2 AND p_state3>0.9
+      "simple" = LONG/SELL based on NN signal strength
       "regime" = strict HMM-based logic optimized for 50%+ win rate and PF >= 2
+    
+    Signals:
+      LONG: Buy signal (enter long position)
+      SELL: Exit signal (close long position)
+      DANGER: High volatility - avoid trading AND exit if in position
+      WAIT: Hold position if long, wait for entry if not in position
+      NO_TRADE: No signals
     
     REGIME MODE OPTIMIZATIONS:
     - Higher signal_threshold (0.35 vs 0.2): Only strong NN signals
@@ -49,22 +57,42 @@ def compute_signal(
     - Stricter regime filter (never allow_state1): Only trade state 1 (medium vol)
     - Minimum predicted pips (35): Skip low-confidence predictions
     - Tighter interval_width (0.015 vs 0.02): More focused predictions
+    - SELL on bearish reversal: nn_signal drops below 0
+    - SELL on regime deterioration: moving towards State 2/3
     """
     interval_width = upper_bound - lower_bound
     min_predicted_return = pips_to_return(min_predicted_pips) if min_predicted_pips > 0 else -1
     
     if signal_mode == "simple":
-        # Simple mode: NN-driven. LONG when bullish, DANGER only in extreme State 3
+        # Simple mode: NN-driven. LONG when bullish, SELL when bearish
         if regime == 2 and p_state3 > 0.9:
             return Signal.DANGER
-        if nn_signal > 0.0 and (min_predicted_pips <= 0 or upper_bound >= min_predicted_return):
+        # SELL: Clear bearish reversal
+        if nn_signal < -0.2:
+            return Signal.SELL
+        # SELL: NN confidence dropped significantly
+        if nn_signal < 0.0 and p_state3 > 0.5:
+            return Signal.SELL
+        # LONG: Strong bullish
+        if nn_signal > 0.3 and (min_predicted_pips <= 0 or upper_bound >= min_predicted_return):
             return Signal.LONG
-        return Signal.NO_TRADE
+        return Signal.WAIT
     
     # Regime mode: STRICT logic optimized for 50%+ win rate & PF >= 2
-    # DANGER: High volatility state (regime 2)
+    # DANGER: High volatility state (regime 2) - EXIT IMMEDIATELY
     if regime == 2 or p_state3 > p_state3_threshold:
         return Signal.DANGER
+    
+    # SELL: Exit signals for manual traders holding positions
+    # - NN signal turned bearish (reversal)
+    if nn_signal < 0.0 and p_state3 > 0.45:
+        return Signal.SELL
+    # - Prediction turned downside (lower_bound negative)
+    if lower_bound < -0.001 and nn_signal < 0.1:
+        return Signal.SELL
+    # - Losing momentum and state deteriorating
+    if nn_signal < signal_threshold * 0.5 and p_state2 < p_state2_threshold - 0.1:
+        return Signal.SELL
     
     # LONG: Only in State 1 (medium volatility) with strong signals
     # - regime == 1 (confirmed medium vol state)
