@@ -21,12 +21,14 @@ st.caption("LONG only (no shorts) • HMM • RDC • NN • Targets: PF≥2, Wi
 
 # ── Sidebar ─────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Data Source")
+    st.header("🔴 LIVE TRADING DATA")
+    st.caption("For live price monitoring and signals")
     data_source = st.radio(
-        "Source",
+        "Live Source",
         ["live", "auto", "csv", "questdb"],
         format_func=lambda x: "Live (yfinance)" if x == "live" else x,
-        horizontal=True
+        horizontal=True,
+        key="live_source"
     )
     use_sample = st.checkbox("Use sample data (no real data)", value=False)
     
@@ -37,7 +39,27 @@ with st.sidebar:
         auto_refresh = st.checkbox("Auto-refresh every minute", value=True, help="Updates live price every 60 seconds")
         refresh_sec = 60  # Fixed 60 seconds for minute-by-minute updates
     
-    st.header("Parameters")
+    st.divider()
+    st.header("📊 BACKTEST DATA")
+    st.caption("Independent data source for backtesting")
+    backtest_source = st.radio(
+        "Backtest Source",
+        ["csv", "questdb", "auto"],
+        format_func=lambda x: "CSV Historical" if x == "csv" else "QuestDB" if x == "questdb" else "Auto (CSV→QuestDB)",
+        horizontal=True,
+        key="backtest_source",
+        help="Use historical data to test your strategy"
+    )
+    use_backtest_sample = st.checkbox("Use sample backtest data", value=False, key="backtest_sample")
+    backtest_period = st.selectbox(
+        "Historical period",
+        ["1mo", "3mo", "6mo", "1y"],
+        index=2,
+        help="How much historical data to use for backtesting (6mo recommended)"
+    )
+    
+    st.divider()
+    st.header("⚙️ Parameters")
     rdc_window = st.slider("RDC window", 30, 120, 60, help="60 = optimal for hourly data")
     n_pca = st.slider("PCA components", 3, 10, 5, help="5 = good balance")
     nn_epochs = st.slider("NN epochs", 10, 100, 50, help="50+ for better convergence")
@@ -48,7 +70,8 @@ with st.sidebar:
         help="Where to find EURUSD_1h_2024_2026.csv"
     )
     
-    st.header("Signal Mode")
+    st.divider()
+    st.header("🎯 Signal Mode")
     signal_mode = st.radio(
         "Mode",
         ["regime", "simple"],
@@ -58,7 +81,8 @@ with st.sidebar:
     )
     min_predicted_pips = st.slider("Min predicted pips", 20, 60, 35, help="Only take trades predicting 35+ pips move")
     
-    st.header("Backtest Settings (for 50%+ WR & PF≥2)")
+    st.divider()
+    st.header("💰 Backtest Settings (for 50%+ WR & PF≥2)")
     holding_periods = st.slider("Holding periods (bars)", 1, 48, 24, help="Max bars to hold trade")
     take_profit_pips = st.slider("Take profit (pips)", 40, 80, 60, help="TP at 60 pips (2:1 R:R with 30 pips SL)")
     stop_loss_pips = st.slider("Stop loss (pips)", 15, 50, 30, help="SL at 30 pips (mathematically: PF=3 at 50% WR)")
@@ -67,7 +91,8 @@ with st.sidebar:
 
 # ── Load Data ────────────────────────────────────────────────
 @st.cache_data(ttl=15)
-def load_data(source: str, use_sample: bool, csv_dir: str, live_period: str = "5d", live_interval: str = "1h"):
+def load_live_data(source: str, use_sample: bool, csv_dir: str, live_period: str = "5d", live_interval: str = "1h"):
+    """Load live trading data (fresh every 15 seconds, can be live or historical)."""
     if use_sample:
         return create_sample_data(n=1000)
     return load_eurusd_data(
@@ -75,6 +100,18 @@ def load_data(source: str, use_sample: bool, csv_dir: str, live_period: str = "5
         csv_dir=csv_dir if csv_dir else None,
         live_period=live_period,
         live_interval=live_interval
+    )
+
+@st.cache_data(ttl=3600)  # Backtest data cached for 1 hour (stable historical data)
+def load_backtest_data(source: str, use_sample: bool, csv_dir: str, backtest_period: str = "6mo"):
+    """Load backtest data (historical, stable - cached longer)."""
+    if use_sample:
+        return create_sample_data(n=1000)
+    return load_eurusd_data(
+        source=source,
+        csv_dir=csv_dir if csv_dir else None,
+        live_period=backtest_period,  # Configurable period for backtest
+        live_interval="1h"  # Fixed to hourly for backtest consistency
     )
 
 @st.cache_resource
@@ -96,27 +133,38 @@ if data_source == "live" and auto_refresh:
     except ImportError:
         pass
 
+# ── Load LIVE Data ────────────────────────────────────────────────
 try:
-    df = load_data(
+    df_live = load_live_data(
         data_source, use_sample, csv_dir,
         live_period=live_period if data_source == "live" else "5d",
         live_interval=live_interval if data_source == "live" else "1h"
     )
-    results = run_system(df, rdc_window, n_pca, nn_epochs, min_predicted_pips, signal_mode)
+    results_live = run_system(df_live, rdc_window, n_pca, nn_epochs, min_predicted_pips, signal_mode)
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Error loading live data: {e}")
     st.info("Try enabling 'Use sample data' or check your data path.")
     st.stop()
 
-close_col = "close" if "close" in df.columns else "Close"
+close_col = "close" if "close" in df_live.columns else "Close"
+
+# ── Load BACKTEST Data (Independent) ────────────────────────────────────────────────
+try:
+    df_backtest = load_backtest_data(backtest_source, use_backtest_sample, csv_dir, backtest_period)
+    results_backtest = run_system(df_backtest, rdc_window, n_pca, nn_epochs, min_predicted_pips, signal_mode)
+except Exception as e:
+    st.error(f"Error loading backtest data: {e}")
+    st.warning("Backtest data unavailable. Check backtest source settings.")
+    df_backtest = None
+    results_backtest = None
 
 # ── Live signal banner (when live mode) ────────────────────────
 if data_source == "live":
-    latest_signal = results["signal"].iloc[-1]
-    latest_price = df[close_col].iloc[-1]
-    latest_time = df.index[-1]
-    nn_sig = results["nn_signal"].iloc[-1]
-    pred_pips = results["predicted_pips"].iloc[-1]
+    latest_signal = results_live["signal"].iloc[-1]
+    latest_price = df_live[close_col].iloc[-1]
+    latest_time = df_live.index[-1]
+    nn_sig = results_live["nn_signal"].iloc[-1]
+    pred_pips = results_live["predicted_pips"].iloc[-1]
     
     # Color code signals
     if latest_signal == "LONG":
@@ -157,64 +205,87 @@ if data_source == "live":
         """, unsafe_allow_html=True)
 
 # ── Metrics ──────────────────────────────────────────────────
+st.subheader("📈 LIVE ANALYSIS")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 with col1:
-    st.metric("Rows", f"{len(df):,}")
+    st.metric("Rows", f"{len(df_live):,}")
 with col2:
-    st.metric("Date range", f"{df.index[0].strftime('%Y-%m-%d')} → {df.index[-1].strftime('%Y-%m-%d')}")
+    st.metric("Date range", f"{df_live.index[0].strftime('%Y-%m-%d')} → {df_live.index[-1].strftime('%Y-%m-%d')}")
 with col3:
-    long_count = (results["signal"] == "LONG").sum()
+    long_count = (results_live["signal"] == "LONG").sum()
     st.metric("🟢 BUY", long_count)
 with col4:
-    sell_count = (results["signal"] == "SELL").sum()
+    sell_count = (results_live["signal"] == "SELL").sum()
     st.metric("🔴 SELL", sell_count)
 with col5:
-    danger_count = (results["signal"] == "DANGER").sum()
+    danger_count = (results_live["signal"] == "DANGER").sum()
     st.metric("⚠️ DANGER", danger_count)
 with col6:
-    wait_count = (results["signal"] == "WAIT").sum()
+    wait_count = (results_live["signal"] == "WAIT").sum()
     st.metric("🟡 WAIT", wait_count)
 
 # ── Backtest ─────────────────────────────────────────────────
-trades_df, bt_stats = run_backtest(
-    df, results,
-    holding_periods=holding_periods,
-    close_col=close_col,
-    exit_on_danger=exit_on_danger,
-    take_profit_pips=take_profit_pips,
-    stop_loss_pips=stop_loss_pips,
-    use_tp_sl=use_tp_sl,
-)
-
-st.subheader("Backtest Results (LONG only — no shorts)")
-target_pf, target_wr = 2.0, 50.0
-col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-with col1:
-    wr = bt_stats['win_rate_pct']
-    status = "✓" if wr >= target_wr else "⚠"
-    st.metric("Win Rate", f"{wr:.1f}%", delta=f"{status} Target: >{target_wr}%")
-with col2:
-    pf = bt_stats["profit_factor"]
-    status = "✓" if pf >= target_pf else "⚠"
-    st.metric("Profit Factor", f"{pf:.2f}" if pf != float("inf") else "∞", delta=f"{status} Target: ≥{target_pf}")
-with col3:
-    st.metric("Total Trades", bt_stats["total_trades"])
-with col4:
-    st.metric("Avg Pips", f"{bt_stats.get('avg_pips', 0):.1f}", help="Target: 50-70 pips per trade")
-with col5:
-    st.metric("Total Return", f"{bt_stats['total_return_pct']:.2f}%")
-with col6:
-    st.metric("Avg Win", f"{bt_stats['avg_win_pct']:.3f}%")
-with col7:
-    st.metric("Avg Loss", f"{bt_stats['avg_loss_pct']:.3f}%")
-
-# Status bar showing if targets are met
-if wr >= target_wr and pf >= target_pf:
-    st.success(f"🎯 **TARGETS MET!** Win Rate ≥ {target_wr}% AND Profit Factor ≥ {target_pf}")
-elif wr >= target_wr or pf >= target_pf:
-    st.info(f"⚠️  **PARTIAL SUCCESS:** {'WR ✓' if wr >= target_wr else 'WR ✗'} | {'PF ✓' if pf >= target_pf else 'PF ✗'}")
+if df_backtest is not None and results_backtest is not None:
+    trades_df, bt_stats = run_backtest(
+        df_backtest, results_backtest,
+        holding_periods=holding_periods,
+        close_col=close_col,
+        exit_on_danger=exit_on_danger,
+        take_profit_pips=take_profit_pips,
+        stop_loss_pips=stop_loss_pips,
+        use_tp_sl=use_tp_sl,
+    )
+    
+    st.subheader("📊 BACKTEST RESULTS (LONG only — no shorts)")
+    st.info(f"✓ Backtest data: **{backtest_source.upper()}** | Rows: {len(df_backtest):,}")
 else:
-    st.warning(f"❌ **TARGETS NOT MET** - WR: {wr:.1f}% (target >{target_wr}) | PF: {pf:.2f} (target ≥{target_pf})")
+    st.warning("⚠️ Backtest data not loaded. Check backtest source configuration.")
+    trades_df = pd.DataFrame()
+    bt_stats = {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate_pct": 0.0,
+        "profit_factor": 0.0,
+        "total_return_pct": 0.0,
+        "avg_pips": 0.0,
+        "avg_win_pct": 0.0,
+        "avg_loss_pct": 0.0,
+        "max_win_pct": 0.0,
+        "max_loss_pct": 0.0,
+    }
+
+if len(trades_df) > 0 or bt_stats["total_trades"] > 0:
+    target_pf, target_wr = 2.0, 50.0
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+    with col1:
+        wr = bt_stats['win_rate_pct']
+        status = "✓" if wr >= target_wr else "⚠"
+        st.metric("Win Rate", f"{wr:.1f}%", delta=f"{status} Target: >{target_wr}%")
+    with col2:
+        pf = bt_stats["profit_factor"]
+        status = "✓" if pf >= target_pf else "⚠"
+        st.metric("Profit Factor", f"{pf:.2f}" if pf != float("inf") else "∞", delta=f"{status} Target: ≥{target_pf}")
+    with col3:
+        st.metric("Total Trades", bt_stats["total_trades"])
+    with col4:
+        st.metric("Avg Pips", f"{bt_stats.get('avg_pips', 0):.1f}", help="Target: 50-70 pips per trade")
+    with col5:
+        st.metric("Total Return", f"{bt_stats['total_return_pct']:.2f}%")
+    with col6:
+        st.metric("Avg Win", f"{bt_stats['avg_win_pct']:.3f}%")
+    with col7:
+        st.metric("Avg Loss", f"{bt_stats['avg_loss_pct']:.3f}%")
+
+    # Status bar showing if targets are met
+    if wr >= target_wr and pf >= target_pf:
+        st.success(f"🎯 **TARGETS MET!** Win Rate ≥ {target_wr}% AND Profit Factor ≥ {target_pf}")
+    elif wr >= target_wr or pf >= target_pf:
+        st.info(f"⚠️  **PARTIAL SUCCESS:** {'WR ✓' if wr >= target_wr else 'WR ✗'} | {'PF ✓' if pf >= target_pf else 'PF ✗'}")
+    else:
+        st.warning(f"❌ **TARGETS NOT MET** - WR: {wr:.1f}% (target >{target_wr}) | PF: {pf:.2f} (target ≥{target_pf})")
+else:
+    st.warning("⚠️ Backtest data not loaded...")
 
 # ── Charts ───────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -229,14 +300,14 @@ with tab1:
         subplot_titles=("EUR/USD Close", "NN Signal")
     )
     fig.add_trace(
-        go.Scatter(x=df.index, y=df[close_col], name="Close", line=dict(color="#1f77b4")),
+        go.Scatter(x=df_live.index, y=df_live[close_col], name="Close", line=dict(color="#1f77b4")),
         row=1, col=1
     )
     # Mark LONG signals
-    long_mask = results["signal"] == "LONG"
+    long_mask = results_live["signal"] == "LONG"
     if long_mask.any():
-        long_times = results.index[long_mask]
-        long_prices = df.loc[long_times, close_col].values
+        long_times = results_live.index[long_mask]
+        long_prices = df_live.loc[long_times, close_col].values
         fig.add_trace(
             go.Scatter(
                 x=long_times, y=long_prices,
@@ -246,7 +317,7 @@ with tab1:
             row=1, col=1
         )
     fig.add_trace(
-        go.Scatter(x=results.index, y=results["nn_signal"], name="NN Signal", line=dict(color="#ff7f0e")),
+        go.Scatter(x=results_live.index, y=results_live["nn_signal"], name="NN Signal", line=dict(color="#ff7f0e")),
         row=2, col=1
     )
     fig.add_hline(y=0.5, line_dash="dash", line_color="gray", row=2, col=1)
@@ -256,13 +327,13 @@ with tab1:
 
 with tab2:
     regime_map = {0: "S1 (Low Vol)", 1: "S2 (Medium Vol)", 2: "S3 (High Vol)"}
-    results["regime_label"] = results["regime"].map(regime_map)
+    results_live["regime_label"] = results_live["regime"].map(regime_map)
     fig = go.Figure()
     for regime_id, label in regime_map.items():
-        mask = results["regime"] == regime_id
+        mask = results_live["regime"] == regime_id
         fig.add_trace(
             go.Scatter(
-                x=results.index[mask], y=df.loc[results.index[mask], close_col],
+                x=results_live.index[mask], y=df_live.loc[results_live.index[mask], close_col],
                 mode="markers", name=label,
                 marker=dict(size=4, opacity=0.7)
             )
@@ -316,9 +387,9 @@ with tab4:
 
 with tab3:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=results.index, y=results["p_state1"], name="P(State 1)"))
-    fig.add_trace(go.Scatter(x=results.index, y=results["p_state2"], name="P(State 2)"))
-    fig.add_trace(go.Scatter(x=results.index, y=results["p_state3"], name="P(State 3)"))
+    fig.add_trace(go.Scatter(x=results_live.index, y=results_live["p_state1"], name="P(State 1)"))
+    fig.add_trace(go.Scatter(x=results_live.index, y=results_live["p_state2"], name="P(State 2)"))
+    fig.add_trace(go.Scatter(x=results_live.index, y=results_live["p_state3"], name="P(State 3)"))
     fig.update_layout(
         title="HMM Smoothed Probabilities",
         xaxis_title="Time",
@@ -330,31 +401,31 @@ with tab3:
 
 with tab5:
     st.dataframe(
-        results.join(df[[close_col]], how="left").tail(100),
+        results_live.join(df_live[[close_col]], how="left").tail(100),
         use_container_width=True,
         height=400
     )
 
 # ── Signal counts ────────────────────────────────────────────
-st.subheader("Signal distribution")
-st.bar_chart(results["signal"].value_counts())
+st.subheader("📊 LIVE Signal distribution")
+st.bar_chart(results_live["signal"].value_counts())
 
 # ── Diagnostic: why no signals? ─────────────────────────────
-with st.expander("Diagnostic: signal blockers"):
+with st.expander("🔍 Diagnostic: signal blockers (LIVE DATA)"):
     st.caption("If you get no LONG signals, check these distributions.")
     d1, d2, d3 = st.columns(3)
     with d1:
         st.write("**Regime distribution**")
-        st.bar_chart(results["regime"].value_counts().sort_index())
+        st.bar_chart(results_live["regime"].value_counts().sort_index())
     with d2:
         st.write("**NN signal** (need > 0.2)")
-        st.metric("Mean", f"{results['nn_signal'].mean():.3f}")
-        st.metric("Max", f"{results['nn_signal'].max():.3f}")
-        st.metric("Count > 0.2", f"{(results['nn_signal'] > 0.2).sum()}")
+        st.metric("Mean", f"{results_live['nn_signal'].mean():.3f}")
+        st.metric("Max", f"{results_live['nn_signal'].max():.3f}")
+        st.metric("Count > 0.2", f"{(results_live['nn_signal'] > 0.2).sum()}")
     with d3:
         st.write("**Predicted pips** (upper_bound)")
-        st.metric("Mean", f"{results['predicted_pips'].mean():.1f}")
-        st.metric("Max", f"{results['predicted_pips'].max():.1f}")
+        st.metric("Mean", f"{results_live['predicted_pips'].mean():.1f}")
+        st.metric("Max", f"{results_live['predicted_pips'].max():.1f}")
         st.metric("Count >= 30", f"{(results['predicted_pips'] >= 30).sum()}")
     st.write("**P(State 2)** (need > 0.4 for State 2):")
     st.metric("Mean", f"{results['p_state2'].mean():.3f}")
